@@ -35,6 +35,7 @@ public class Client2 {
     private static AtomicInteger FAILED_REQ = new AtomicInteger(0);
 
     private static final Gson GSON = new Gson();
+    private static long globalStartTime;
 
     private static List<RequestRecord> records = Collections.synchronizedList(new ArrayList<>());
 
@@ -49,19 +50,34 @@ public class Client2 {
         int delay = Integer.parseInt(args[2]);
         String serverURI = args[3];
 
-        // Initialization phase
-        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI);
+        CountDownLatch latch1 = new CountDownLatch(1);
+        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI, latch1);
+        latch1.await();
+//        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI);
 
-        long startTime = System.currentTimeMillis();
-
+        globalStartTime = System.currentTimeMillis();
+        CountDownLatch latch2 = new CountDownLatch(numThreadGroups);
         for (int i = 0; i < numThreadGroups; i++) {
-            runThreads(threadGroupSize, REQUESTS_PER_THREAD, serverURI);
+            runThreads(threadGroupSize, REQUESTS_PER_THREAD, serverURI, latch2);
             TimeUnit.SECONDS.sleep(delay);
         }
+        latch2.await();
+
+//        ExecutorService executor = Executors.newFixedThreadPool(INIT_THREADS);
+
+        // Initialization phase
+//        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI);
+//
+//        long startTime = System.currentTimeMillis();
+//
+//        for (int i = 0; i < numThreadGroups; i++) {
+//            runThreads(threadGroupSize, REQUESTS_PER_THREAD, serverURI);
+//            TimeUnit.SECONDS.sleep(delay);
+//        }
 
         long endTime = System.currentTimeMillis();
 
-        long wallTime = (endTime - startTime) / 1000;
+        long wallTime = (endTime - globalStartTime) / 1000;
         long totalRequests = ((long) numThreadGroups * threadGroupSize * REQUESTS_PER_THREAD) * 2;
 
         double throughput = (double) totalRequests / wallTime;
@@ -97,26 +113,21 @@ public class Client2 {
         displayStatistics(getLatencies);
     }
 
-    private static void runThreads(int numThreads, int requestsPerThread, String serverURI) throws InterruptedException {
+    private static void runThreads(int numThreads, int requestsPerThread, String serverURI, CountDownLatch latch) throws InterruptedException {
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-        CountDownLatch latch = new CountDownLatch(numThreads);
 
         for (int i = 0; i < numThreads; i++) {
             executor.submit(() -> {
-                try {
-                    for (int j = 0; j < requestsPerThread; j++) {
-                        sendRequest(serverURI + "/albums", "POST", null);
-                        sendRequest(serverURI + "/albums", "GET", "1");
-                    }
-                } finally {
-                    latch.countDown();
+                for (int j = 0; j < requestsPerThread; j++) {
+                    sendRequest(serverURI + "/albums", "POST", null);
+                    sendRequest(serverURI + "/albums", "GET", "1");
                 }
+                latch.countDown();
             });
         }
-
-        latch.await();
         executor.shutdown();
     }
+
 
     private static void displayStatistics(List<Long> latencies) {
         Collections.sort(latencies);
@@ -130,7 +141,8 @@ public class Client2 {
                 latencies.get(latencies.size() / 2);
         long p99 = latencies.get((int) (latencies.size() * 0.99));
         long min = latencies.get(0);
-        long max = latencies.get(latencies.size() - 1);
+        long max = latencies.get(latencies.size()
+            - 1);
 
         System.out.println("Mean: " + mean);
         System.out.println("Median: " + median);

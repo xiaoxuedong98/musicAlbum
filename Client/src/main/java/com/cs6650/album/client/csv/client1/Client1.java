@@ -28,6 +28,7 @@ public class Client1 {
     private static AtomicInteger SUCCESS_REQ = new AtomicInteger(0);
     private static AtomicInteger FAILED_REQ = new AtomicInteger(0);
     private static final HttpClient CLIENT = HttpClient.newHttpClient();
+    private static long globalStartTime;
     private static final Gson GSON = new Gson();
 
 
@@ -42,19 +43,24 @@ public class Client1 {
         int delay = Integer.parseInt(args[2]);
         String serverURI = args[3];
 
+        CountDownLatch latch1 = new CountDownLatch(1);
+        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI, latch1);
+        latch1.await();
         // Initialization phase
-        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI);
+//        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI);
 
-        long startTime = System.currentTimeMillis();
-
+//        long startTime = System.currentTimeMillis();
+        globalStartTime = System.currentTimeMillis();
+        CountDownLatch latch2 = new CountDownLatch(numThreadGroups);
         for (int i = 0; i < numThreadGroups; i++) {
-            runThreads(threadGroupSize, REQUESTS_PER_THREAD, serverURI);
+            runThreads(threadGroupSize, REQUESTS_PER_THREAD, serverURI, latch2);
             TimeUnit.SECONDS.sleep(delay);
         }
+        latch2.await();
 
         long endTime = System.currentTimeMillis();
 
-        long wallTime = (endTime - startTime) / 1000;
+        long wallTime = (endTime - globalStartTime) / 1000;
         long totalRequests = ((long) numThreadGroups * threadGroupSize * REQUESTS_PER_THREAD) * 2;
 
         double throughput = (double) totalRequests / wallTime;
@@ -65,24 +71,18 @@ public class Client1 {
         System.out.println("Throughput: " + throughput + " requests/second");
     }
 
-    private static void runThreads(int numThreads, int requestsPerThread, String serverURI) throws InterruptedException {
+    private static void runThreads(int numThreads, int requestsPerThread, String serverURI, CountDownLatch latch) throws InterruptedException {
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-        CountDownLatch latch = new CountDownLatch(numThreads);
 
         for (int i = 0; i < numThreads; i++) {
             executor.submit(() -> {
-                try {
-                    for (int j = 0; j < requestsPerThread; j++) {
-                        sendRequest(serverURI + "/albums", "POST", null);
-                        sendRequest(serverURI + "/albums", "GET", "1");
-                    }
-                } finally {
-                    latch.countDown();
+                for (int j = 0; j < requestsPerThread; j++) {
+                    sendRequest(serverURI + "/albums", "POST", null);
+                    sendRequest(serverURI + "/albums", "GET", "1");
                 }
+                latch.countDown();
             });
         }
-
-        latch.await();
         executor.shutdown();
     }
 

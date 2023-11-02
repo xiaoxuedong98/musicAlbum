@@ -29,19 +29,48 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.http.HttpEntity;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.ByteArrayEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
+import org.apache.http.util.EntityUtils;
+
 public class Client3 {
 
     private static final int INIT_THREADS = 10;
     private static final int INIT_REQUESTS_PER_THREAD = 100;
     private static final int REQUESTS_PER_THREAD = 1000;
-    private static final HttpClient CLIENT = HttpClient.newHttpClient();
+    //    private static final HttpClient CLIENT = HttpClient.newHttpClient();
+    private static final PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+    private static final CloseableHttpClient POOLED_CLIENT;
     private static final Gson GSON = new Gson();
-    private static AtomicInteger TOTAL_REQ = new AtomicInteger(0);
-    private static AtomicInteger SUCCESS_REQ = new AtomicInteger(0);
-    private static AtomicInteger FAILED_REQ = new AtomicInteger(0);
+    private static AtomicInteger successRequests = new AtomicInteger(0);
+    private static AtomicInteger failedRequests = new AtomicInteger(0);
 
     private static ConcurrentHashMap<Integer, AtomicInteger> throughputPerSecond = new ConcurrentHashMap<>();
     private static long globalStartTime;
+    private static final byte[] IMAGE_CONTENT;
+
+    static {
+        connectionManager.setMaxTotal(200);
+        connectionManager.setDefaultMaxPerRoute(200);
+        connectionManager.setValidateAfterInactivity(60000);
+        POOLED_CLIENT = HttpClients.custom().setConnectionManager(connectionManager).disableAutomaticRetries().build();
+
+        byte[] tempContent;
+        try {
+            tempContent = Files.readAllBytes(Paths.get("./nmtb.png"));
+        } catch (IOException e) {
+            e.printStackTrace();
+            tempContent = new byte[0];  // or choose another way
+        }
+        IMAGE_CONTENT = tempContent;
+    }
 
     private static List<RequestRecord> records = Collections.synchronizedList(new ArrayList<>());
 
@@ -57,28 +86,31 @@ public class Client3 {
         String serverURI = args[3];
 
         // Initialization phase
-        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI);
+        CountDownLatch latch1 = new CountDownLatch(1);
+        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI, latch1);
+        latch1.await();
+//        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI);
 
         globalStartTime = System.currentTimeMillis();
-
+        CountDownLatch latch2 = new CountDownLatch(numThreadGroups);
         for (int i = 0; i < numThreadGroups; i++) {
-            runThreads(threadGroupSize, REQUESTS_PER_THREAD, serverURI);
+            runThreads(threadGroupSize, REQUESTS_PER_THREAD, serverURI, latch2);
             TimeUnit.SECONDS.sleep(delay);
         }
+        latch2.await();
 
         long endTime = System.currentTimeMillis();
 
         long wallTime = (endTime - globalStartTime) / 1000;
-        long totalRequests = ((long) numThreadGroups * threadGroupSize * REQUESTS_PER_THREAD) * 2;
+        long totalRequests = (long) INIT_THREADS * INIT_REQUESTS_PER_THREAD +
+            (long) numThreadGroups * threadGroupSize * REQUESTS_PER_THREAD * 2;
 
         double throughput = (double) totalRequests / wallTime;
 
         System.out.println("Wall Time: " + wallTime + " seconds");
         System.out.println("Throughput: " + throughput + " requests/second");
-//        System.out.println("Expected Total request: " + totalRequests);
-        System.out.println("Number of Total requests: "+ TOTAL_REQ);
-        System.out.println("Number of Success requests: "+ SUCCESS_REQ);
-        System.out.println("Number of Failure requests: "+ FAILED_REQ);
+        System.out.println("Success Requests: " + successRequests.get());
+        System.out.println("Failed Requests: " + failedRequests.get());
 
         calculateAndDisplayStatistics();
         writeToCSV("results.csv");
@@ -104,24 +136,18 @@ public class Client3 {
         displayStatistics(getLatencies);
     }
 
-    private static void runThreads(int numThreads, int requestsPerThread, String serverURI) throws InterruptedException {
+    private static void runThreads(int numThreads, int requestsPerThread, String serverURI, CountDownLatch latch) throws InterruptedException {
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-        CountDownLatch latch = new CountDownLatch(numThreads);
 
         for (int i = 0; i < numThreads; i++) {
             executor.submit(() -> {
-                try {
-                    for (int j = 0; j < requestsPerThread; j++) {
-                        sendRequest(serverURI + "/albums", "POST", null);
-                        sendRequest(serverURI + "/albums", "GET", "1");
-                    }
-                } finally {
-                    latch.countDown();
+                for (int j = 0; j < requestsPerThread; j++) {
+                    sendRequest(serverURI + "/albums", "POST", null);
+                    sendRequest(serverURI + "/albums", "GET", "1");
                 }
+                latch.countDown();
             });
         }
-
-        latch.await();
         executor.shutdown();
     }
 
@@ -133,8 +159,8 @@ public class Client3 {
         }
         double mean = sum / (double) latencies.size();
         double median = latencies.size() % 2 == 0 ?
-                (latencies.get(latencies.size() / 2 - 1) + latencies.get(latencies.size() / 2)) / 2.0 :
-                latencies.get(latencies.size() / 2);
+            (latencies.get(latencies.size() / 2 - 1) + latencies.get(latencies.size() / 2)) / 2.0 :
+            latencies.get(latencies.size() / 2);
         long p99 = latencies.get((int) (latencies.size() * 0.99));
         long min = latencies.get(0);
         long max = latencies.get(latencies.size() - 1);
@@ -174,8 +200,6 @@ public class Client3 {
             long startTime = System.currentTimeMillis();
             try {
                 int responseCode;
-                int count = TOTAL_REQ.getAndIncrement();
-//                System.out.println(count);
                 if ("POST".equals(method)) {
                     responseCode = sendPostRequest(urlString);
                 } else {  // For the GET method
@@ -183,37 +207,45 @@ public class Client3 {
                 }
 
                 long endTime = System.currentTimeMillis();
-                records.add(new RequestRecord(startTime, method, endTime - startTime, responseCode));
+                long latency = endTime - startTime;
+                records.add(new RequestRecord(startTime, method, latency, responseCode));
 
                 // Record throughput
                 int second = (int) ((endTime - globalStartTime) / 1000);
                 throughputPerSecond.computeIfAbsent(second, k -> new AtomicInteger(0)).incrementAndGet();
 
-                if (responseCode == 200 || responseCode == 201) {
+                if (responseCode == 200) {
                     success = true;
-                    SUCCESS_REQ.getAndIncrement();
+                    successRequests.incrementAndGet();
+//                    System.out.println("Success: " + method + " " + urlString + " " + successRequests.get() + " latency: " + latency);
                 } else {
                     retries++;
-                    System.out.println("Retry..." + retries);
-                    FAILED_REQ.getAndIncrement();
+//                    System.out.println("Failed: " + method + " " + urlString + " " + responseCode + " " + retries + " latency: " + latency);
+                    failedRequests.incrementAndGet();
                 }
 
             } catch (Exception e) {
                 retries++;
-                System.err.println("Error sending request: " + e.getMessage());
+                failedRequests.incrementAndGet();
+                System.err.println("Error sending " + method + "request: " + e.getMessage());
             }
         }
     }
 
     private static int sendGetRequest(String urlString) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(new URI(urlString))
-                .GET()
-                .build();
-
-        HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-
-        return response.statusCode();
+        HttpGet httpGet = new HttpGet(urlString);
+        long getStartTime = System.currentTimeMillis();
+        CloseableHttpResponse response = POOLED_CLIENT.execute(httpGet);
+        long getEndTime = System.currentTimeMillis();
+        long getLatency = getEndTime - getStartTime;
+//        System.out.println("GET latency: " + getLatency);
+        try {
+            HttpEntity entity1 = response.getEntity();
+            EntityUtils.consume(entity1);
+            return response.getStatusLine().getStatusCode();
+        } finally {
+            response.close();
+        }
     }
 
     private static int sendPostRequest(String urlString) throws Exception {
@@ -227,7 +259,8 @@ public class Client3 {
         writer.append("Content-Disposition: form-data; name=\"image\"; filename=\"nmtb.png\"").append("\r\n");
         writer.append("Content-Type: image/png").append("\r\n");
         writer.append("\r\n").flush();
-        Files.copy(Paths.get("./nmtb.png"), bytesOutput);
+//        Files.copy(Paths.get("./nmtb.png"), bytesOutput);
+        bytesOutput.write(IMAGE_CONTENT);
         bytesOutput.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
         // Add JSON profile part using Gson
@@ -244,15 +277,22 @@ public class Client3 {
 
         writer.append("--").append(boundary).append("--").append("\r\n").flush();
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(new URI(urlString))
-                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
-                .POST(HttpRequest.BodyPublishers.ofByteArray(bytesOutput.toByteArray()))
-                .build();
+        HttpPost httpPost = new HttpPost(urlString);
+        httpPost.setHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+        httpPost.setEntity(new ByteArrayEntity(bytesOutput.toByteArray()));
 
-        HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-
-        return response.statusCode();
+        long postStartTime = System.currentTimeMillis();
+        CloseableHttpResponse response = POOLED_CLIENT.execute(httpPost);
+        long postEndTime = System.currentTimeMillis();
+        long postLatency = postEndTime - postStartTime;
+//        System.out.println("POST latency: " + postLatency);
+        try {
+            HttpEntity entity1 = response.getEntity();
+            EntityUtils.consume(entity1);
+            return response.getStatusLine().getStatusCode();
+        } finally {
+            response.close();
+        }
     }
 
     private static class RequestRecord {
