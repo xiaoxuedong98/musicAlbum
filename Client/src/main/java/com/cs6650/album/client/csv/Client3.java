@@ -32,7 +32,7 @@ public class Client3 {
     private static final int INIT_REQUESTS_PER_THREAD = 100;
     private static final int REQUESTS_PER_THREAD = 1000;
     //    private static final HttpClient CLIENT = HttpClient.newHttpClient();
-    private static final PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+    public static final PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
     private static final CloseableHttpClient POOLED_CLIENT;
     private static final Gson GSON = new Gson();
     private static AtomicInteger successRequests = new AtomicInteger(0);
