@@ -11,26 +11,12 @@ import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-
-import java.io.ByteArrayOutputStream;
-import java.io.PrintWriter;
-import java.net.URI;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.*;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.http.HttpEntity;
-import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
@@ -57,8 +43,8 @@ public class Client3 {
     private static final byte[] IMAGE_CONTENT;
 
     static {
-        connectionManager.setMaxTotal(200);
-        connectionManager.setDefaultMaxPerRoute(200);
+        connectionManager.setMaxTotal(100);
+        connectionManager.setDefaultMaxPerRoute(100);
         connectionManager.setValidateAfterInactivity(60000);
         POOLED_CLIENT = HttpClients.custom().setConnectionManager(connectionManager).disableAutomaticRetries().build();
 
@@ -67,7 +53,7 @@ public class Client3 {
             tempContent = Files.readAllBytes(Paths.get("./nmtb.png"));
         } catch (IOException e) {
             e.printStackTrace();
-            tempContent = new byte[0];  // or choose another way
+            tempContent = new byte[0];  // 或者选择其他的错误处理方式
         }
         IMAGE_CONTENT = tempContent;
     }
@@ -89,10 +75,9 @@ public class Client3 {
         CountDownLatch latch1 = new CountDownLatch(1);
         runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI, latch1);
         latch1.await();
-//        runThreads(INIT_THREADS, INIT_REQUESTS_PER_THREAD, serverURI);
 
         globalStartTime = System.currentTimeMillis();
-        CountDownLatch latch2 = new CountDownLatch(numThreadGroups);
+        CountDownLatch latch2 = new CountDownLatch(numThreadGroups * threadGroupSize);
         for (int i = 0; i < numThreadGroups; i++) {
             runThreads(threadGroupSize, REQUESTS_PER_THREAD, serverURI, latch2);
             TimeUnit.SECONDS.sleep(delay);
@@ -118,8 +103,8 @@ public class Client3 {
     }
 
     private static void calculateAndDisplayStatistics() {
-        List<Long> postLatencies = new ArrayList<>();
-        List<Long> getLatencies = new ArrayList<>();
+        List<Long> postLatencies =  new ArrayList<>();
+        List<Long> getLatencies =  new ArrayList<>();
 
         for (RequestRecord record : records) {
             if ("POST".equals(record.method)) {
@@ -220,7 +205,7 @@ public class Client3 {
 //                    System.out.println("Success: " + method + " " + urlString + " " + successRequests.get() + " latency: " + latency);
                 } else {
                     retries++;
-//                    System.out.println("Failed: " + method + " " + urlString + " " + responseCode + " " + retries + " latency: " + latency);
+                    System.out.println("Failed: " + method + " " + urlString + " " + responseCode + " " + retries + " latency: " + latency);
                     failedRequests.incrementAndGet();
                 }
 
@@ -234,10 +219,10 @@ public class Client3 {
 
     private static int sendGetRequest(String urlString) throws Exception {
         HttpGet httpGet = new HttpGet(urlString);
-        long getStartTime = System.currentTimeMillis();
+//        long getStartTime = System.currentTimeMillis();
         CloseableHttpResponse response = POOLED_CLIENT.execute(httpGet);
-        long getEndTime = System.currentTimeMillis();
-        long getLatency = getEndTime - getStartTime;
+//        long getEndTime = System.currentTimeMillis();
+//        long getLatency = getEndTime - getStartTime;
 //        System.out.println("GET latency: " + getLatency);
         try {
             HttpEntity entity1 = response.getEntity();
@@ -281,10 +266,10 @@ public class Client3 {
         httpPost.setHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
         httpPost.setEntity(new ByteArrayEntity(bytesOutput.toByteArray()));
 
-        long postStartTime = System.currentTimeMillis();
+//        long postStartTime = System.currentTimeMillis();
         CloseableHttpResponse response = POOLED_CLIENT.execute(httpPost);
-        long postEndTime = System.currentTimeMillis();
-        long postLatency = postEndTime - postStartTime;
+//        long postEndTime = System.currentTimeMillis();
+//        long postLatency = postEndTime - postStartTime;
 //        System.out.println("POST latency: " + postLatency);
         try {
             HttpEntity entity1 = response.getEntity();
